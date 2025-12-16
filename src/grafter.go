@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -11,10 +12,13 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const GraftVersion = "0002"
 
 // NOTE: We implement this type so we can
 // implkement a custom writer for it
@@ -73,7 +77,10 @@ type scion struct {
 	Note string
 	// TODO: Hash
 	// TODO: Inputs that generated this file
+	// TODO: Command that generated this workflow
 	// TODO: Workflow used
+	// If it has been grafted yet
+	Grafted bool
 }
 
 type graftage struct {
@@ -82,14 +89,42 @@ type graftage struct {
 	// MORSEL: This is the stock or rootstock of the graft, where the scion is placed
 	StockDir string
 	// This is all the files/paths we will graft
-	Scions []scion
+	Scions map[string]scion
 }
 
-// This function takes in a file name and verifies there's no scion
-// in the graft that has a similar name
-// if we find it we either update it or delete it
-// THINK: Perhaps returns a pointer?
-func (g *graftage) Find(n string, u bool) error { return nil }
+// Also FIXME: Add a check of file name
+// TODO: Add checking if the config file exists first and if not create with defaults
+// TODO: add an option to make the
+// Config is the path where we will load the user config from
+func (g *graftage) Init(config string, stock string) error {
+	// Need to init this before anything can be put inside
+	g.Scions = make(map[string]scion)
+	grafted_files_bytes, err := os.ReadFile(config)
+	if errors.Is(err, fs.ErrNotExist) {
+		log.Println("No config file, creating...")
+		g.StockDir = stock
+	} else if err != nil {
+		return err
+	} else {
+		err = json.Unmarshal(grafted_files_bytes, &g)
+		if err != nil {
+			return err
+		}
+		if g.StockDir == "" {
+			log.Println("Empty graft location, adding default...")
+			g.StockDir = stock
+		}
+	}
+	if !filepath.IsAbs(g.StockDir) {
+		g.StockDir, err = filepath.Abs(g.StockDir)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Writes the graft to the config file
 func (g *graftage) WriteConfig(config string) error {
 	g_b, err := json.MarshalIndent(g, "", " ")
 	if err != nil {
@@ -102,36 +137,81 @@ func (g *graftage) WriteConfig(config string) error {
 	return nil
 }
 
+// Grafts everything in the slice of scions
+func (g *graftage) GraftScions(rt_scions []scion) error {
+	// For evaluates the variable we will range over ONCE
+	// so we are free to modify the variable and append to it
+	// without worrying the loop will extend once again
+	// https://go.dev/ref/spec#For_statements
+	for _, x := range rt_scions {
+		log.Printf("Grafting [%s] to [%s]\n", x.OriginalPath, x.Path)
+		// Maybe we could move this to scionsFromArgs
+		s := g.Scions[x.ID]
+		if s != (scion{}) {
+			// Ensure the ID is the same and the original path is the same
+			// although we can probably just use the original path
+			if s.ID == x.ID && s.OriginalPath == x.OriginalPath {
+				log.Printf("Found [%v] in the user graft...\n",
+					x.ID)
+
+				// Generate a random 4 digit number to append at the end
+				r := rand.Uint32() >> 19
+				digit := uint64(r)
+				digit_s := strconv.FormatUint(digit, 10)
+				x.ID = x.ID + "-" + digit_s
+				if x.Dir {
+					// Since its a directory we only need to append
+					// Add option to only fetch the indicated ones
+					x.Path = x.Path + "-" + digit_s
+				} else {
+					// we need to extract the directory and recreate
+					// the full file path
+					scion_dir := filepath.Dir(x.Path)
+					x.Path = filepath.Join(scion_dir, x.ID)
+				}
+				log.Printf("Creating copy with ID [%v]", x.ID)
+				// Append at the end of the string
+				//rt_scions[j].ID = new_scion_id_t
+				// The scion is already in the main graft
+			}
+		}
+		// We wont graft it yet
+		if !x.Grafted {
+			g.Scions[x.ID] = x
+			continue
+		}
+		err := x.WriteScion()
+		if err != nil {
+			return nil
+		}
+		// Finally add the new member to the graft
+		// The range grabs a copy of the variable its ranging over,
+		// so it is safe to modify the original while looping
+		g.Scions[x.ID] = x
+	}
+	return nil
+}
+
 // FIXME: I don't like having the config file here...
 // FIXME: Change to use ID and not stem
 func (g *graftage) Remove(list []string, config string) error {
 	// if we found anything at all
 	found := false
-list_loop:
 	for _, v := range list {
-		for j, x := range g.Scions {
-			if v == x.ID {
-				// We put the last element wherever
-				// the element we want to delete is at
-				// And then overwrite the array
-				g.Scions[j] = g.Scions[len(g.Scions)-1]
-				g.Scions[len(g.Scions)-1] = scion{}
-				g.Scions = g.Scions[:len(g.Scions)-1]
-				log.Printf("Removing [%s] with ID [%s] from the file system...", x.Path, x.ID)
-				err := os.RemoveAll(x.Path)
-				if err != nil {
-					return err
-				}
-				found = true
-				continue list_loop
+		s := g.Scions[v]
+		if s != (scion{}) {
+			log.Printf("Removing [%s] with ID [%s] from the file system...", s.Path, s.ID)
+			delete(g.Scions, v)
+			err := os.RemoveAll(s.Path)
+			if err != nil {
+				return err
 			}
+			found = true
+			continue
 		}
-		if found == false {
-			log.Printf("Could not find ID [%s]", v)
-		}
+		log.Printf("Could not find ID [%s]", v)
 	}
 	if found {
-
 		log.Println("Saving changes to config file...")
 		err := g.WriteConfig(config)
 		if err != nil {
@@ -142,12 +222,111 @@ list_loop:
 	return nil
 }
 
-// This function takes in a scion and updates the values of the member scion
-func (s *scion) Update(s2 scion) error { return nil }
+// Fetches all the scions that have not been grafted yet
+func (g *graftage) FetchMissing(config string) error {
+	// Add option to only fetch the indicated ones
+	for _, v := range g.Scions {
+		if !v.Grafted {
+			// SECTION: Add missing things in graft
+			stat_result, err := os.Stat(v.OriginalPath)
+			if err != nil {
+				log.Fatal(err)
+			}
+			// TODO:ID
+			v.ID = stat_result.Name()
+			// TODO: stem
+			v.Stem = stat_result.Name()
+			// SECTION: Check if its a dir or a file
+			if stat_result.IsDir() {
+				v.Dir = true
+			}
+			// TODO: Size
+			v.Size = stat_result.Size()
+			// TODO: perms
+			v.Perms = stat_result.Mode()
 
-func readDirNCreate() error { return nil }
+			v.WriteScion()
+			g.Scions[v.ID] = v
+		}
+	}
+	err := g.WriteConfig(config)
+	if err != nil {
+		log.Println("Error writing to config file...")
+		log.Fatal(err)
+	}
+	return nil
+}
+
+// Copies the listed ID inside dstPath
+func (g *graftage) CopyScions(ids []string, dstPath string) error {
+	err := os.MkdirAll(dstPath, 0o755)
+	if err != nil {
+		return err
+	}
+	for _, x := range ids {
+		s := g.Scions[x]
+		if s != (scion{}) {
+			dstPathComplete := filepath.Join(dstPath, s.ID)
+			if s.Dir {
+				files, err := os.ReadDir(s.Path)
+				if err != nil {
+					return err
+				}
+				// NOTE: Need to have this because we are placing it
+				// inside the directory we pass, so we need to join it
+				err = os.MkdirAll(dstPathComplete, s.Perms)
+				if err != nil {
+					return err
+				}
+				_, err = DigDirNCreate(files, dstPathComplete, s.Path)
+				if err != nil {
+					return err
+				}
+			} else {
+				err = CopyFile(dstPathComplete, s.Path, s.Perms)
+			}
+		}
+	}
+	return nil
+}
+
+// FIXME: Could perhaps make it take a string as an arg to allow for flipping
+// original with a path
+// Writes the scion to the filesystem aka add it to the graft folder
+// FIXME: Change name
+func (s *scion) WriteScion() error {
+	if s.Dir {
+		files, err := os.ReadDir(s.OriginalPath)
+		if err != nil {
+			return err
+		}
+		// FIXME / DOCS : in the docs we need to mention that
+		// he directories inherit the permissions from the main grafted dir
+		err = os.MkdirAll(s.Path, s.Perms)
+		if err != nil {
+			return err
+		}
+		s.Size, err = DigDirNCreate(files, s.Path, s.OriginalPath)
+		if err != nil {
+			return err
+		}
+	} else {
+		// First we create the directories
+		dir_only := filepath.Dir(s.Path)
+		err := os.MkdirAll(dir_only, 0o755)
+		if err != nil {
+			return err
+		}
+		err = CopyFile(s.Path, s.OriginalPath, s.Perms)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func CopyFile(dst string, src string, perms fs.FileMode) error {
+	log.Printf("Copying [%s] to [%s]\n", src, dst)
 	// Open file we will read
 	srcFi, err := os.Open(src)
 	if err != nil {
@@ -170,7 +349,8 @@ func CopyFile(dst string, src string, perms fs.FileMode) error {
 
 // p is the directory where all these entries are in
 // FIXME: Need to rename variables in this function
-func DigDirNCreate(d []fs.DirEntry, dstPath string, srcPath string) error {
+func DigDirNCreate(d []fs.DirEntry, dstPath string, srcPath string) (int64, error) {
+	var size_total int64
 	for _, f := range d {
 		innerFiPath := filepath.Join(srcPath, f.Name())
 		innerFiStat, err := os.Stat(innerFiPath)
@@ -182,59 +362,30 @@ func DigDirNCreate(d []fs.DirEntry, dstPath string, srcPath string) error {
 			// Create the dst dir so when its time to copy we can finally do it
 			err = os.MkdirAll(dstFiPath, innerFiStat.Mode())
 			if err != nil {
-				return err
+				return 0, err
 			}
 			newSrcDirEnt, err := os.ReadDir(innerFiPath)
 			if err != nil {
-				return err
+				return 0, err
 			}
-			err = DigDirNCreate(newSrcDirEnt, dstFiPath, innerFiPath)
+			siz, err := DigDirNCreate(newSrcDirEnt, dstFiPath, innerFiPath)
 			if err != nil {
-				return nil
+				return 0, nil
 			}
+			size_total += siz
 		} else {
-			log.Printf("Copying [%s] to [%s]\n", innerFiPath, dstFiPath)
 			err := CopyFile(dstFiPath, innerFiPath, innerFiStat.Mode())
 			if err != nil {
 				log.Fatal(err)
 			}
+			size_total += innerFiStat.Size()
 		}
 	}
-	return nil
+	return size_total, nil
 }
 
-// Also FIXME: Add a check of file name
-// TODO: Add checking if the config file exists first and if not create with defaults
-// TODO: add an option to make the
-// Config is the path where we will load the user config from
-func (g *graftage) Init(config string, stock string) error {
-
-	grafted_files_bytes, err := os.ReadFile(config)
-	if errors.Is(err, fs.ErrNotExist) {
-		log.Println("No config file, creating...")
-		g.StockDir = stock
-	} else if err != nil {
-		log.Fatal(err)
-	} else {
-		err = json.Unmarshal(grafted_files_bytes, &g)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if g.StockDir == "" {
-			log.Println("Empty graft location, adding default...")
-			g.StockDir = stock
-		}
-	}
-	if !filepath.IsAbs(g.StockDir) {
-		g.StockDir, err = filepath.Abs(g.StockDir)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-	return nil
-}
-
-func scionsFromArgs(rt_scions *[]scion, args []string, stock string, user_home string) error {
+// temp_graft_dir is the directory where these
+func scionsFromArgs(rt_scions *[]scion, args []string, stock string, user_home string, exist bool) error {
 	for _, v := range args {
 		var scion_temp = scion{}
 		// XXX: Should we stat first or absolute path first?
@@ -261,33 +412,48 @@ func scionsFromArgs(rt_scions *[]scion, args []string, stock string, user_home s
 		} else {
 			scion_path = v
 		}
-		// SECTION: stat path
-		stat_result, err := os.Stat(scion_path)
-		if err != nil {
-			log.Fatal(err)
+
+		if !exist {
+			s_name := filepath.Base(v)
+			scion_temp.ID = s_name
+			scion_temp.Stem = s_name
+			scion_temp.Path = filepath.Join(stock, scion_temp.Stem)
+			scion_temp.OriginalPath = scion_path
+			scion_temp.Date = time.Now()
+			scion_temp.Note = ""
+			scion_temp.Grafted = false
+		} else {
+			// SECTION: stat path
+			stat_result, err := os.Stat(scion_path)
+			if err != nil {
+				log.Fatal(err)
+			}
+			// TODO:ID
+			scion_temp.ID = stat_result.Name()
+			// TODO: stem
+			scion_temp.Stem = stat_result.Name()
+			// TODO: path
+			// We want to join this
+			// FIXME: Add a runtime option to use a different directory
+			scion_temp.Path = filepath.Join(stock, scion_temp.Stem)
+			// TODO: original path
+			scion_temp.OriginalPath = scion_path
+			// SECTION: Check if its a dir or a file
+			if stat_result.IsDir() {
+				scion_temp.Dir = true
+			}
+			// TODO: Size
+			scion_temp.Size = stat_result.Size()
+			// TODO: perms
+			scion_temp.Perms = stat_result.Mode()
+			// TODO: date
+			scion_temp.Date = time.Now()
+			// TODO: note?
+			scion_temp.Note = ""
+			// TODO: Grafted
+			// If it wont be grafted we pass a false
+			scion_temp.Grafted = true
 		}
-		// TODO:ID
-		scion_temp.ID = stat_result.Name()
-		// TODO: stem
-		scion_temp.Stem = stat_result.Name()
-		// TODO: path
-		// We want to join this
-		// FIXME: Add a runtime option to use a different directory
-		scion_temp.Path = filepath.Join(stock, scion_temp.Stem)
-		// TODO: original path
-		scion_temp.OriginalPath = scion_path
-		// SECTION: Check if its a dir or a file
-		if stat_result.IsDir() {
-			scion_temp.Dir = true
-		}
-		// TODO: Size
-		scion_temp.Size = stat_result.Size()
-		// TODO: perms
-		scion_temp.Perms = stat_result.Mode()
-		// TODO: date
-		scion_temp.Date = time.Now()
-		// TODO: note?
-		scion_temp.Note = ""
 		// TODO: Hash
 		// TODO: Inputs that generated this file
 		// TODO: Workflow used
@@ -300,94 +466,46 @@ func scionsFromArgs(rt_scions *[]scion, args []string, stock string, user_home s
 	return nil
 }
 
-// Grafts everything in the slice of scions
-func (g *graftage) GraftScions(rt_scions []scion) error {
-	// For evaluates the variable we will range over ONCE
-	// so we are free to modify the variable and append to it
-	// without worrying the loop will extend once again
-	// https://go.dev/ref/spec#For_statements
-	for _, x := range rt_scions {
-		log.Printf("Grafting [%s] to [%s]\n", x.OriginalPath, x.Path)
-		// Maybe we could move this to scionsFromArgs
-		for _, v := range g.Scions {
-			// Ensure the ID is the same and the original path is the same
-			// although we can probably just use the original path
-			if v.ID == x.ID && v.OriginalPath == x.OriginalPath {
-				log.Printf("Found [%v] in the user graft...\n",
-					x.ID)
-
-				// Generate a random 4 digit number to append at the end
-				r := rand.Uint32() >> 19
-				digit := uint64(r)
-				digit_s := strconv.FormatUint(digit, 10)
-				x.ID = x.ID + "-" + digit_s
-				if x.Dir {
-					// Since its a directory we only need to append
-					x.Path = x.Path + "-" + digit_s
-				} else {
-					// we need to extract the directory and recreate
-					// the full file path
-					scion_dir := filepath.Dir(x.Path)
-					x.Path = filepath.Join(scion_dir, x.ID)
-				}
-				log.Printf("Creating copy with ID [%v]", x.ID)
-				// Append at the end of the string
-				//rt_scions[j].ID = new_scion_id_t
-				// The scion is already in the main graft
-				break
-			}
-		}
-		if x.Dir {
-			files, err := os.ReadDir(x.OriginalPath)
-			if err != nil {
-				log.Fatal(err)
-			}
-			// FIXME / DOCS : in the docs we need to mention that
-			// he directories inherit the permissions from the main grafted dir
-			err = os.MkdirAll(x.Path, x.Perms)
-			if err != nil {
-				log.Fatal(err)
-			}
-			err = DigDirNCreate(files, x.Path, x.OriginalPath)
-			if err != nil {
-				log.Fatal(err)
-			}
-		} else {
-			// First we create the directories
-			dir_only := filepath.Dir(x.Path)
-			err := os.MkdirAll(dir_only, 0o755)
-			if err != nil {
-				log.Fatal(err)
-			}
-			err = CopyFile(x.Path, x.OriginalPath, x.Perms)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-		// Finally add the new member to the graft
-		// The range grabs a copy of the variable its ranging over,
-		// so it is safe to modify the original while looping
-		g.Scions = append(g.Scions, x)
-	}
-	return nil
+type rt_options struct {
+	version   bool
+	list      bool
+	fetch     bool
+	remove    bool
+	exist     bool
+	copy      bool
+	copyDir   string
+	graft_dir string
 }
 
 // The way this should works is that we go through the listed files
 // and directories with an array of some sort
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("USAGE: grafter [file1] [file2] ... [fileN]")
-		fmt.Println("grafter -l will list all of your grafted paths")
-		fmt.Println("grafter -r [ID1] [ID2] ... [IDN] will remove the files from the graft")
-		os.Exit(1)
-	}
+	// SECTION: Init of runtime stuff
+	var opts rt_options
+	flag.BoolVar(&opts.version, "version", false, "Show the current version of grafter.")
+	flag.BoolVar(&opts.list, "list", false, "List everything in the user graft.")
+	flag.BoolVar(&opts.fetch, "fetch", false, "Validate and fetch missing files in the user graft.")
+	flag.BoolVar(&opts.remove, "remove", false, "Remove the listed IDs from the user graft.")
+	flag.BoolVar(&opts.exist, "exist", true, "If -exist=1 the files will be grafted to the list.")
+	flag.BoolVar(&opts.copy, "copy", false, "Copy the files of the listed IDs to destdir.")
+	flag.StringVar(&opts.copyDir, "destdir", "", "Directory to copy the selected files to.")
+	flag.StringVar(&opts.graft_dir, "graftdir", "", "Directory to graft the listed files to")
+	flag.Parse()
+	// os.Exit(1)
+	// rt_files_exist := true
+	// if opts.exist {
+	// 	rt_files_exist = false
+	// }
 	// For tilde expansion
 	runtime_user, err := user.Current()
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	rt_user_home_dir := runtime_user.HomeDir
+	runtime_stock_dir := opts.graft_dir
+	if runtime_stock_dir == "" {
+		runtime_stock_dir = filepath.Join(rt_user_home_dir, "Grafts")
+	}
 
 	// So there's a future problem here
 	// What happens when the list is so long we
@@ -399,28 +517,52 @@ func main() {
 	// TODO: Add a function for updating a scion
 	var grafts graftage
 	config_file := filepath.Join(rt_user_home_dir, "grafts.json")
-	stock_dir := filepath.Join(rt_user_home_dir, "Grafts")
-	grafts.Init(config_file, stock_dir)
+	err = grafts.Init(config_file, runtime_stock_dir)
+	if err != nil {
+		log.Fatal(err)
 
-	// FIXME: Maybe just list the file names or whatever identifier we are using
-	if os.Args[1] == "-l" {
+	}
+
+	if opts.version {
+		fmt.Println("Grafter version:", GraftVersion)
+		b, _ := debug.ReadBuildInfo()
+		fmt.Println(b.String())
+		os.Exit(0)
+	} else if opts.list {
 		for _, v := range grafts.Scions {
-			fmt.Printf("Date: %-12s | ID: %-12s | Original: %s\n", v.Date.Format(time.RFC822), v.ID, v.OriginalPath)
+			fmt.Printf("Date: %-12s | ", v.Date.Format(time.RFC822))
+			fmt.Printf("ID: %-12s | ", v.ID)
+			fmt.Printf("Original: %s\n", v.OriginalPath)
 		}
 		os.Exit(0)
-	} else if os.Args[1] == "-r" && len(os.Args) > 2 {
-		err := grafts.Remove(os.Args[2:], config_file)
+	} else if opts.fetch {
+		grafts.FetchMissing(config_file)
+		os.Exit(0)
+	} else if opts.copy {
+		if opts.copyDir == "" {
+			log.Println("Empty destdir flag.")
+			flag.PrintDefaults()
+		}
+		err := grafts.CopyScions(flag.Args(), opts.copyDir)
+		if err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(0)
+	} else if opts.remove {
+		err := grafts.Remove(flag.Args(), config_file)
 		if err != nil {
 			log.Fatal(err)
 		}
 		os.Exit(0)
 	}
 
+	// SECTION: actual program processing
 	var runtime_scions []scion = make([]scion, 0, len(os.Args)-1)
 	// This is where we would add a condition to indicate if in THIS run
 	// of the program we would use a different stock directory than
 	// the one in the config file/default one
-	err = scionsFromArgs(&runtime_scions, os.Args[1:], grafts.StockDir, rt_user_home_dir)
+
+	err = scionsFromArgs(&runtime_scions, flag.Args(), runtime_stock_dir, rt_user_home_dir, opts.exist)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -446,7 +588,7 @@ func main() {
 	err = grafts.WriteConfig(config_file)
 	if err != nil {
 		log.Println("Error writing to config file...")
-		log.Fatal(nil)
+		log.Fatal(err)
 	}
 	// TODO / FIXME So we need a way to save to a file,
 	// Need to create a new syntax for that

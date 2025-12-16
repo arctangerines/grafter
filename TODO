@@ -1,3 +1,7 @@
+* FIX ME THE NAME OF THE FUNCTIONS AND VARIABLES
+* organize the functions
+* When integrating with scientific workflows we could additionally add the command line arguments used to generate a file.
+* Change "Date" to "Timestamp"
 * Hashing!!!
 * We should have the option to deploy the document back to its original directory or to deploy it at the place we point at
 * Compression?
