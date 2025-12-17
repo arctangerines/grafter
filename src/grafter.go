@@ -505,6 +505,11 @@ func main() {
 	runtime_stock_dir := opts.graft_dir
 	if runtime_stock_dir == "" {
 		runtime_stock_dir = filepath.Join(rt_user_home_dir, "Grafts")
+	} else if !filepath.IsAbs(runtime_stock_dir) {
+		runtime_stock_dir, err = filepath.Abs(runtime_stock_dir)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	// So there's a future problem here
@@ -557,7 +562,7 @@ func main() {
 	}
 
 	// SECTION: actual program processing
-	var runtime_scions []scion = make([]scion, 0, len(os.Args)-1)
+	var runtime_scions []scion = make([]scion, 0, len(flag.Args()))
 	// This is where we would add a condition to indicate if in THIS run
 	// of the program we would use a different stock directory than
 	// the one in the config file/default one

@@ -1,4 +1,5 @@
 * FIX ME THE NAME OF THE FUNCTIONS AND VARIABLES
+* Add comments in the code indicating the type of flag eg if it changes main functionality or is supporting fucntionality
 * organize the functions
 * When integrating with scientific workflows we could additionally add the command line arguments used to generate a file.
 * Change "Date" to "Timestamp"
