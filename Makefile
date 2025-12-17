@@ -12,6 +12,7 @@ RELEASEDIR = build/release
 INSTALLDIR = ~/go/bin
 
 SRCLIST = $(wildcard src/*.go)
+SRCLIST = src/grafter.go
 
 
 all : $(BUILDDIR)/$(BIN)
