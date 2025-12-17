@@ -505,17 +505,17 @@ func main() {
 	}
 	// SECTION: Init of runtime stuff
 	var opts rt_options
-	flag.BoolVar(&opts.version, "version", false, "Show the current version of grafter.")
-	flag.BoolVar(&opts.list, "list", false, "List everything in the user graft.")
-	flag.BoolVar(&opts.fetch, "fetch", false, "Validate and fetch missing files in the user graft.")
-	flag.BoolVar(&opts.remove, "remove", false, "Remove the listed IDs from the user graft.")
-	flag.BoolVar(&opts.exist, "exist", true, "If -exist=0 the files will only be grafted to the list.")
+	flag.BoolVar(&opts.version, "v", false, "[verbose] Show the current version of grafter.")
+	flag.BoolVar(&opts.list, "l", false, "[List] List everything in the user graft.")
+	flag.BoolVar(&opts.fetch, "f", false, "[Fetch] Validate and fetch missing files in the user graft.")
+	flag.BoolVar(&opts.remove, "r", false, "[Remove] Remove the listed IDs from the user graft.")
+	flag.BoolVar(&opts.exist, "e", true, "[Exist] If -exist=0 the files will only be grafted to the list.")
 	// This flag defaults to true, I think that in general, with the use cases im thinking
 	// you will want to make copies of the file
-	flag.BoolVar(&opts.move, "move", true, "If the file should be moved to the graft directory.")
-	flag.BoolVar(&opts.copy, "copy", false, "Copy the files of the listed IDs to destdir.")
-	flag.StringVar(&opts.copyDir, "destdir", "", "Directory to copy the selected files to.")
-	flag.StringVar(&opts.graft_dir, "graftdir", "", "Directory to graft the listed files to")
+	flag.BoolVar(&opts.move, "m", true, "[Move] If the file should be moved to the graft directory.")
+	flag.BoolVar(&opts.copy, "c", false, "[Copy] Copy the files of the listed IDs to destdir.")
+	flag.StringVar(&opts.copyDir, "d", "", "[CopyDir] Directory to copy the selected files to.")
+	flag.StringVar(&opts.graft_dir, "g", "", "[GraftDir] Directory to graft the listed files to")
 	flag.Parse()
 	var arg_list []string
 	if len(stdin_arr) == 0 {
