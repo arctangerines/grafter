@@ -5,6 +5,7 @@ Meant as an archival tool.
 
 `grafter [file1] [file2] ... [fileN]` will add files to the graft.
 
+You can build with by running `make` and/or `make install`
 ```
 Usage of grafter:
   Usage of grafter:

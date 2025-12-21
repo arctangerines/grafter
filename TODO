@@ -1,3 +1,5 @@
+* fix digdirncreate call
+* Also fix the argument names, some arguments like "copy" or "exists" are inconsistent
 * FIX ME THE NAME OF THE FUNCTIONS AND VARIABLES
 * Option to copy an ID to a new path
 * Option to update an ID?

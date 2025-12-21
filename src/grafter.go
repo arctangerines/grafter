@@ -143,7 +143,7 @@ func (g *graftage) WriteConfig(config string) error {
 }
 
 // Grafts everything in the slice of scions
-func (g *graftage) GraftScions(rt_scions []scion, move bool) error {
+func (g *graftage) GraftScions(rt_scions []scion, move bool, del bool) error {
 	// For evaluates the variable we will range over ONCE
 	// so we are free to modify the variable and append to it
 	// without worrying the loop will extend once again
@@ -190,7 +190,13 @@ func (g *graftage) GraftScions(rt_scions []scion, move bool) error {
 		}
 		err := x.WriteScion()
 		if err != nil {
-			return nil
+			return err
+		}
+		if del {
+			err := os.RemoveAll(x.OriginalPath)
+			if err != nil {
+				return err
+			}
 		}
 		// Finally add the new member to the graft
 		// The range grabs a copy of the variable its ranging over,
@@ -335,6 +341,23 @@ func (s *scion) WriteScion() error {
 
 func CopyFile(dst string, src string, perms fs.FileMode) error {
 	log.Printf("Copying [%s] to [%s]\n", src, dst)
+	// We have to stat once more to check for symlinks
+	srcStat, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	if srcStat.Mode()&fs.ModeSymlink != 0 {
+		log.Printf("Path [%s] is a symlink, preserving...\n", src)
+		oldname, err := os.Readlink(src)
+		if err != nil {
+			return err
+		}
+		err = os.Symlink(oldname, dst)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
 	// Open file we will read
 	srcFi, err := os.Open(src)
 	if err != nil {
@@ -382,6 +405,11 @@ func DigDirNCreate(d []fs.DirEntry, dstPath string, srcPath string) (int64, erro
 			}
 			size_total += siz
 		} else {
+			if innerFiStat.Mode()&fs.ModeSymlink != 0 {
+				fmt.Printf("\nSkipping symlink %v\n", innerFiPath)
+				os.Exit(1)
+				continue
+			}
 			err := CopyFile(dstFiPath, innerFiPath, innerFiStat.Mode().Perm())
 			if err != nil {
 				log.Fatal(err)
@@ -485,9 +513,10 @@ type rt_options struct {
 	remove    bool
 	exist     bool
 	move      bool
-	copy      bool
+	cpy       bool
 	copyDir   string
 	graft_dir string
+	del       bool
 }
 
 // The way this should works is that we go through the listed files
@@ -513,7 +542,8 @@ func main() {
 	// This flag defaults to true, I think that in general, with the use cases im thinking
 	// you will want to make copies of the file
 	flag.BoolVar(&opts.move, "m", true, "[Move] If the file should be moved to the graft directory.")
-	flag.BoolVar(&opts.copy, "c", false, "[Copy] Copy the files of the listed IDs to destdir.")
+	flag.BoolVar(&opts.del, "del", false, "[Delete] Delete the original files after grafting.")
+	flag.BoolVar(&opts.cpy, "c", false, "[Copy] Copy the files of the listed IDs to destdir.")
 	flag.StringVar(&opts.copyDir, "d", "", "[CopyDir] Directory to copy the selected files to.")
 	flag.StringVar(&opts.graft_dir, "g", "", "[GraftDir] Directory to graft the listed files to")
 	flag.Parse()
@@ -574,7 +604,7 @@ func main() {
 	} else if opts.fetch {
 		grafts.FetchMissing(config_file)
 		os.Exit(0)
-	} else if opts.copy {
+	} else if opts.cpy {
 		if opts.copyDir == "" {
 			log.Println("Empty destdir flag.")
 			flag.PrintDefaults()
@@ -590,6 +620,9 @@ func main() {
 			log.Fatal(err)
 		}
 		os.Exit(0)
+	}
+	if opts.del && !opts.move {
+		log.Fatal("Must have the move flag enabled when the delete flag is enabled.")
 	}
 
 	// SECTION: actual program processing
@@ -617,7 +650,7 @@ func main() {
 	// an array with all the scions loll
 	// We could in theory add the looping of the runtime scions here but no,
 	// not for now
-	err = grafts.GraftScions(runtime_scions, opts.move)
+	err = grafts.GraftScions(runtime_scions, opts.move, opts.del)
 	if err != nil {
 		log.Fatal(err)
 	}
