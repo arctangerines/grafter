@@ -115,7 +115,7 @@ func TestFilesExist(t *testing.T) {
 	b_test_file.Close()
 
 	var runtime_scions_test []scion = make([]scion, 0, len(files_test_slice))
-	err = scionsFromArgs(&runtime_scions_test, files_test_slice, tmp_dir_stock, tmp_dir_home, true, true)
+	err = scionsFromSlice(&runtime_scions_test, files_test_slice, tmp_dir_stock, tmp_dir_home, true, true)
 	if err != nil {
 		t.Errorf("Error building scions: %v\n", err)
 	}
@@ -153,7 +153,7 @@ func TestFilesExist(t *testing.T) {
 	// TODO: Graft sciuons and hash to assert
 	var grafts_test graftage
 	grafts_test.Init(tmp_dir, tmp_dir_stock)
-	grafts_test.GraftScions(runtime_scions_test, true)
+	grafts_test.GraftScions(runtime_scions_test, true, true)
 	graft_assert(grafts_test, runtime_scions_test[0], runtime_scions_test[0].ID, tmp_dir_stock)
 	graft_assert(grafts_test, runtime_scions_test[1], runtime_scions_test[1].ID, tmp_dir_stock)
 
@@ -188,7 +188,7 @@ func TestFilesExist(t *testing.T) {
 		b_hash_original_str,
 		b_hash_grafted_str,
 		"[b] Asserting original hash against grafted hash\n")
-	//os.RemoveAll(tmp_dir_src)
+	os.RemoveAll(tmp_dir_src)
 }
 func graft_assert(g graftage, rt_scion scion, id string, stock string) {
 	// NOTE: Stock
